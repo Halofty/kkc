@@ -1,0 +1,10 @@
+numpy
+pandas
+scikit-learn
+lightgbm        # Learning-to-Rank (lambdarank)
+torch
+torchvision     # EfficientNet-B0
+pillow
+streamlit
+pytest
+graphifyy       # graphify CLI for Claude Code hooks/skill

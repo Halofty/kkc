@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+data/raw/*
+data/processed/*
+!data/**/.gitkeep
+models/
+.claude/settings.local.json
+graphify-out/cache/
+.claude/settings.json.graphify-bak
+seoul_data/

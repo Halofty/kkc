@@ -1,0 +1,21 @@
+{
+  "0": "test_core.py",
+  "1": "AI 자취방 추천 서비스 — 제안서 초안 (팀 KKC)",
+  "2": "SubwayGraph",
+  "3": "rank.py",
+  "4": "model.py",
+  "5": "KKC · AI 자취방 추천 서비스 — Claude 작업 규칙",
+  "6": "KKC · AI 자취방 추천 서비스",
+  "7": ".claude/CLAUDE.md",
+  "8": "install-plugins.sh script",
+  "9": "install-plugins.ps1",
+  "10": "commute/__init__.py",
+  "11": "kkc/__init__.py",
+  "12": "price/__init__.py",
+  "13": "ranking/__init__.py",
+  "14": "vision/__init__.py",
+  "15": "streamlit_app.py",
+  "16": "DataFrame",
+  "17": "test_pipeline.py",
+  "18": "Series"
+}
