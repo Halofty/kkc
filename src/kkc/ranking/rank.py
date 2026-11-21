@@ -14,13 +14,17 @@ DEFAULT_WEIGHTS = {"rent": 0.5, "commute": 0.35, "amenity": 0.15}
 AMENITY_KEYWORDS = ("편의점", "슈퍼마켓", "의원", "병원")  # 편의점·마트·병원
 
 
-def amenity_counts(store_csv) -> pd.Series:
-    """소상공인시장진흥공단 상가(상권)정보 CSV → 자치구별 편의점·마트·병원 수.
-    shortcut: 제안서의 '반경 내 개수' 대신 자치구 전체 개수. 매물 좌표가 생기면 위도·경도로 반경 집계."""
-    df = read_table(store_csv, must="상권업종", usecols=lambda c: "소분류명" in c or "시군구명" in c)  # 300MB라 두 컬럼만
-    sub = df[col(df, "소분류명")].fillna("")
-    hit = df[sub.str.contains("|".join(AMENITY_KEYWORDS))]
-    return hit.groupby(col(df, "시군구명")).size()
+def dong_table(store_csv) -> pd.DataFrame:
+    """소상공인시장진흥공단 상가(상권)정보 CSV → (구, 법정동)별 위치 + 편의점·마트·병원 수.
+    동 경계 데이터가 없어서 동 위치 = 그 동 상가 좌표의 중앙값(가게가 몰린 생활 중심).
+    구별 개수는 이 표를 구로 더하면 된다.
+    shortcut: 제안서의 '매물 반경 내 개수' 대신 동 전체 개수. 매물 좌표가 생기면 위도·경도로 반경 집계."""
+    keep = ("소분류명", "시군구명", "법정동명", "경도", "위도")
+    df = read_table(store_csv, must="상권업종", usecols=lambda c: any(k in c for k in keep))  # 300MB라 필요한 컬럼만
+    hit = df[col(df, "소분류명")].fillna("").str.contains("|".join(AMENITY_KEYWORDS))
+    out = df.assign(hit=hit).groupby([col(df, "시군구명"), col(df, "법정동명")]).agg(
+        lat=(col(df, "위도"), "median"), lon=(col(df, "경도"), "median"), amenity_cnt=("hit", "sum"))
+    return out.rename_axis(["gu", "dong"])
 
 
 def _minmax(s: pd.Series) -> pd.Series:

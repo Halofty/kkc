@@ -34,7 +34,7 @@ python scripts/build_data.py --rent data/raw/rent_*.csv --dist data/raw/역간�
     --transfer data/raw/환승.csv --coords data/raw/역좌표.csv --stores data/raw/상가_서울.csv
 python scripts/train_fov.py data/raw/photos --epochs 10   # 0.5x·1x 실내 사진 (EXIF 유지)
 ```
-결과는 `models/`, `data/processed/regions.csv`에 생기고 커밋하지 않는다.
+결과는 `models/`, `data/processed/`(구: regions·deals, 동: dongs·deals_dong, 역: stations)에 생기고 커밋하지 않는다.
 
 ## Claude Code 플러그인
 `.claude/settings.json`에 Superpowers · Karpathy skills · I have ADHD · Ponytail이 project scope로 등록돼 있음.

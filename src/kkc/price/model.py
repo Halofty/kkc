@@ -44,15 +44,18 @@ def load_rent(path) -> pd.DataFrame:
     return df[seoul].dropna(subset=["gu", "dong", "area_m2", "contract_ym", "deposit", "rent"]).reset_index(drop=True)
 
 
-def region_rents(model, df: pd.DataFrame, area_m2: float = 20.0) -> pd.Series:
-    """자치구별 '표준 원룸'(전용 area_m2, 최근 계약월, 그 구의 대표 동·층·건축년도, 전체 최빈 건물용도) 예측 환산월세(만원)."""
-    rows = df.groupby("gu").agg(dong=("dong", lambda s: s.mode()[0]), floor=("floor", "median"),
-                                build_year=("build_year", "median")).reset_index()
+def region_rents(model, df: pd.DataFrame, area_m2: float = 20.0, by: tuple = ("gu",)) -> pd.Series:
+    """지역별 '표준 원룸'(전용 area_m2, 최근 계약월, 그 지역의 층·건축년도, 전체 최빈 건물용도) 예측 환산월세(만원).
+    by=("gu",): 자치구별(동은 그 구의 대표 동), by=("gu", "dong"): 동별."""
+    agg = {"floor": ("floor", "median"), "build_year": ("build_year", "median")}
+    if "dong" not in by:
+        agg["dong"] = ("dong", lambda s: s.mode()[0])
+    rows = df.groupby(list(by)).agg(**agg).reset_index()
     # 건물용도는 구마다 다르게 두면 오피스텔 많은 구만 비싸 보여서, 전체에서 가장 흔한 용도 하나로 통일
     rows["btype"] = df.btype.mode()[0] if df.btype.notna().any() else None
     rows["area_m2"] = area_m2
     rows["contract_ym"] = df.contract_ym.max()
-    return pd.Series(model.predict(_prep(rows)), index=rows.gu).round(1)
+    return pd.Series(model.predict(_prep(rows)), index=rows.set_index(list(by)).index).round(1)
 
 
 # shortcut: 방 개수 컬럼이 없어서 면적으로 구분(원룸 ≤ 33㎡=10평, 투룸 33~66㎡). 방 수 데이터가 생기면 그걸로.
@@ -60,8 +63,8 @@ ROOMS = {"원룸": "~33㎡", "투룸": "33~66㎡"}
 ROOM_BINS = [0, 33, 66]
 
 
-def region_deal_stats(df: pd.DataFrame, months: int = 12) -> pd.DataFrame:
-    """자치구 × 방(원룸/투룸) × 계약(월세/전세)별 보증금·월세 통계(만원), 최근 months개월 실제 계약.
+def region_deal_stats(df: pd.DataFrame, months: int = 12, by: tuple = ("gu",)) -> pd.DataFrame:
+    """지역(by: 구 또는 구·동) × 방(원룸/투룸) × 계약(월세/전세)별 보증금·월세 통계(만원), 최근 months개월 실제 계약.
     예측값이 아니라 실제 계약 통계라서 화면에 '보통 이 정도'로 보여주기 좋다."""
     since = int((pd.Period(str(int(df.contract_ym.max())), "M") - (months - 1)).strftime("%Y%m"))
     d = df[df.contract_ym >= since].assign(
@@ -70,7 +73,7 @@ def region_deal_stats(df: pd.DataFrame, months: int = 12) -> pd.DataFrame:
     # 보증금은 1000만·500만 같은 딱 떨어지는 값에 몰려서 중앙값이 거의 모든 구에서 1000이 된다 → 가운데 50% 범위도 같이.
     # nearest: 6,793만 같은 보간값 대신 실제 계약에 있는 값으로
     q = lambda p: (lambda s: s.quantile(p, interpolation="nearest"))  # noqa: E731
-    return d.groupby(["gu", "room", "kind"], observed=True).agg(
+    return d.groupby([*by, "room", "kind"], observed=True).agg(
         deposit_med=("deposit", "median"), rent_med=("rent", "median"), deals=("rent", "size"),
         deposit_lo=("deposit", q(0.25)), deposit_hi=("deposit", q(0.75)))
 

@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from kkc.commute.subway import GU_STATION, load_seoul_metro, load_station_coords, nearest_station, region_commute
 from kkc.data import read_table
 from kkc.price.model import load_rent, region_deal_stats, region_rents, train
-from kkc.ranking.rank import amenity_counts
+from kkc.ranking.rank import dong_table
 from kkc.vision.fov import exif_fov, predict_fov, train_fov
 
 
@@ -51,6 +51,8 @@ def test_region_rents_orders_by_price():
     assert mae < 5
     r = region_rents(model, df, area_m2=20)
     assert r["강남구"] > r["관악구"] + 30
+    by_dong = region_rents(model, df, area_m2=20, by=("gu", "dong"))
+    assert by_dong[("강남구", "강남구동")] > by_dong[("관악구", "관악구동")] + 30
 
 
 def test_region_rents_same_btype_for_all_regions():
@@ -81,11 +83,15 @@ def test_load_seoul_metro(tmp_path):
     assert pd.isna(commute["강남구"])  # 그래프에 없는 역 → NaN
 
 
-def test_amenity_counts(tmp_path):
+def test_dong_table(tmp_path):
     p = tmp_path / "stores.csv"
-    p.write_text("상호명,상권업종소분류명,시군구명\nA,편의점,관악구\nB,편의점,관악구\nC,카페,관악구\n"
-                 "D,슈퍼마켓,강남구\nE,내과의원,강남구\n", encoding="cp949")
-    assert amenity_counts(p).to_dict() == {"강남구": 2, "관악구": 2}
+    p.write_text("상호명,상권업종소분류명,시군구명,법정동명,경도,위도\n"
+                 "A,편의점,관악구,신림동,126.92,37.48\nB,편의점,관악구,신림동,126.94,37.50\nC,카페,관악구,신림동,126.93,37.49\n"
+                 "D,슈퍼마켓,강남구,역삼동,127.03,37.50\nE,내과의원,강남구,역삼동,127.04,37.50\n", encoding="cp949")
+    t = dong_table(p)
+    assert t.amenity_cnt.to_dict() == {("강남구", "역삼동"): 2, ("관악구", "신림동"): 2}  # 카페 제외
+    assert t.loc[("관악구", "신림동"), ["lat", "lon"]].tolist() == [37.49, 126.93]  # 상가 좌표 중앙값
+    assert t.groupby("gu").amenity_cnt.sum().to_dict() == {"강남구": 2, "관악구": 2}  # 구별 개수
 
 
 def _photo(path, focal_35mm, color):
@@ -163,3 +169,6 @@ def test_region_deal_stats():
     assert s.loc[("관악구", "투룸", "월세"), "rent_med"] == 150  # 50㎡
     assert s.loc[("관악구", "원룸", "전세"), "deposit_med"] == 20000  # 월세 0 = 전세
     assert len(s) == 3  # 90㎡(투룸 초과)·12개월 전 강남구(202502) 제외
+    by_dong = region_deal_stats(df.assign(dong=["신림동", "봉천동", "신림동", "신림동", "신림동", "역삼동"]),
+                                by=("gu", "dong"))
+    assert by_dong.loc[("관악구", "신림동", "원룸", "월세"), "deals"] == 1  # 봉천동 거래는 따로

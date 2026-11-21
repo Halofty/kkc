@@ -9,6 +9,8 @@
   data/processed/stations.csv  역명, 위도, 경도 (지도·목적지 근처 역 찾기)
   data/processed/regions.csv   region, pred_rent, amenity_cnt, 대표역 좌표
   data/processed/deals.csv     구 × 원룸/투룸 × 월세/전세 보증금·월세 통계(최근 12개월)
+  data/processed/dongs.csv     gu, dong, 동 위치(상가 좌표 중앙값), 편의시설 수, 가까운 역·도보 분, AI 예측 시세
+  data/processed/deals_dong.csv  동 × 원룸/투룸 × 월세/전세 통계
 """
 import argparse
 import pickle
@@ -20,9 +22,9 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from kkc.commute.subway import GU_STATION, load_seoul_metro, load_station_coords  # noqa: E402
+from kkc.commute.subway import GU_STATION, load_seoul_metro, load_station_coords, nearest_station  # noqa: E402
 from kkc.price.model import load_rent, region_deal_stats, region_rents, train  # noqa: E402
-from kkc.ranking.rank import amenity_counts  # noqa: E402
+from kkc.ranking.rank import dong_table  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--rent", nargs="+", required=True, help="국토부 전월세 실거래가 CSV (여러 개 가능)")
@@ -51,7 +53,8 @@ print(f"역 좌표: {len(coords)}곳" + (f", 그래프 역 중 좌표 없음 {no
 missing = [s for s in GU_STATION.values() if not graph.nodes_of(s)]
 print(f"지하철: 역 {len({n for n, _ in graph.adj}):,}곳" + (f", 대표역 이름 불일치 {missing}" if missing else ""))
 
-regions = pd.DataFrame({"pred_rent": region_rents(model, deals), "amenity_cnt": amenity_counts(args.stores)})
+dongs = dong_table(args.stores)
+regions = pd.DataFrame({"pred_rent": region_rents(model, deals), "amenity_cnt": dongs.groupby("gu").amenity_cnt.sum()})
 stats = region_deal_stats(deals).reset_index()
 stats.to_csv(ROOT / "data/processed/deals.csv", index=False)
 print(f"deals.csv: 구×방×계약 {len(stats)}칸 (최근 12개월 ~{deals.contract_ym.max()})")
@@ -59,3 +62,12 @@ regions["station"] = regions.index.map(GU_STATION)
 regions = regions.join(coords, on="station").rename_axis("region").reset_index().dropna()
 regions.to_csv(ROOT / "data/processed/regions.csv", index=False)
 print(f"regions.csv: {len(regions)}개 구")
+
+# 동: 동 위치에서 가장 가까운 역 + 도보 분 → 앱에서 통학역까지 지하철 시간만 더하면 된다
+dongs["pred_rent"] = region_rents(model, deals, by=("gu", "dong"))
+dongs = dongs.dropna(subset=["pred_rent"])  # 전월세 거래가 없는 동(상가만 있는 곳)은 뺀다
+dongs["station"], dongs["walk_min"] = zip(*(nearest_station(la, lo, coords) for la, lo in zip(dongs.lat, dongs.lon)))
+dongs.round({"walk_min": 1}).reset_index().to_csv(ROOT / "data/processed/dongs.csv", index=False)
+dstats = region_deal_stats(deals, by=("gu", "dong")).reset_index()
+dstats.to_csv(ROOT / "data/processed/deals_dong.csv", index=False)
+print(f"dongs.csv: {len(dongs)}개 동 (가까운 역까지 도보 중앙값 {dongs.walk_min.median():.0f}분), deals_dong.csv: {len(dstats)}칸")

@@ -33,9 +33,11 @@ from kkc.ui import gap_label  # noqa: E402
 from kkc.vision.fov import (STD_FOV_DEG, crop_ratio, load_fov_model, predict_fov,  # noqa: E402
                             restore_standard_view, wide_angle_flag)
 
-REGIONS, STATIONS, DEALS, PRICE, SUBWAY, FOV = (ROOT / p for p in (
-    "data/processed/regions.csv", "data/processed/stations.csv", "data/processed/deals.csv", "models/price.joblib",
-    "models/subway.pkl", "models/fov.pt"))
+REGIONS, STATIONS, DEALS, DONGS, DEALS_DONG, PRICE, SUBWAY, FOV = (ROOT / p for p in (
+    "data/processed/regions.csv", "data/processed/stations.csv", "data/processed/deals.csv", "data/processed/dongs.csv",
+    "data/processed/deals_dong.csv", "models/price.joblib", "models/subway.pkl", "models/fov.pt"))
+MIN_DEALS = 10  # 동 단위는 최근 12개월 거래가 이보다 적으면 통계가 들쭉날쭉해서 뺀다
+DONG_SHOWN = 40  # 동 단위 목록·지도에 보여줄 상위 개수 (400곳을 다 그리면 지도가 덮인다)
 SAMPLE = pd.DataFrame({
     "region": ["관악구", "동작구", "광진구", "마포구", "성북구", "강남구"],
     "pred_rent": [55, 60, 62, 68, 52, 102],
@@ -51,7 +53,7 @@ SEOUL_BOX = "126.76,37.70,127.19,37.42"  # 위치 검색을 서울 안으로 한
 PAGES = ["동네 찾기", "매물 비교", "사진 화각"]
 PAGE_ICON = {"동네 찾기": ":material/home:", "매물 비교": ":material/view_column:", "사진 화각": ":material/photo_camera:"}
 BLUE = "#326CF9"
-FILTER_KEYS = ["kind", "room", "dep_m", "rent_원룸", "rent_투룸", "dep_j_원룸", "dep_j_투룸", "commute", "w", "order",
+FILTER_KEYS = ["level", "kind", "room", "dep_m", "rent_원룸", "rent_투룸", "dep_j_원룸", "dep_j_투룸", "commute", "w", "order",
                "order2", "pick3"]
 
 st.set_page_config(page_title="KKC 자취방 추천", page_icon="🏠", layout="wide")
@@ -212,16 +214,10 @@ def esc(v) -> str:
     return html.escape(str(v))
 
 
-def leaflet_map(points, dest, stations=(), note="", height=760):
-    """다방식 지도. points: dict(lat, lon, value, name, tip, state[top|on|off]) — 파란 원(value) + 흰 이름표(name)."""
-    data = json.dumps({"points": points, "dest": dest, "stations": list(stations), "note": note}, ensure_ascii=False)
-    components.html(f"""
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<style>
+def map_css(height: int) -> str:
+    """두 지도(카카오·Leaflet)가 같이 쓰는 마커·이름표 모양."""
+    return f"""<style>
 html,body,#m{{height:{height}px;margin:0;font-family:'Pretendard Variable',Pretendard,'Malgun Gothic',sans-serif}}
-.leaflet-tile-pane{{filter:grayscale(1) sepia(.08) brightness(1.12) contrast(.78)}}
 .mk{{display:flex;align-items:center;white-space:nowrap;font-family:inherit}}
 .mk .c{{width:44px;height:44px;border-radius:22px;background:{BLUE};color:#fff;font-weight:700;font-size:15px;display:flex;
   align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.2);position:relative;z-index:2;
@@ -238,10 +234,28 @@ html,body,#m{{height:{height}px;margin:0;font-family:'Pretendard Variable',Prete
 .leaflet-bar a{{width:40px!important;height:40px!important;line-height:40px!important;font-size:20px!important;color:#444!important}}
 .leaflet-bar{{border:1px solid #DADADA!important;border-radius:4px!important;box-shadow:none!important}}
 .leaflet-tooltip{{font-family:inherit;font-size:12.5px;border-radius:4px}}
-</style><div id="m"></div><div class="note" id="note"></div>
+
+</style>"""
+
+
+def map_data(points, dest, stations, note) -> str:
+    # </script> 같은 문자열이 들어와도 스크립트 밖으로 못 나가게
+    return json.dumps({"points": points, "dest": dest, "stations": list(stations), "note": note},
+                      ensure_ascii=False).replace("</", "<\\/")
+
+
+def leaflet_map(points, dest, stations=(), note="", height=760):
+    """다방식 지도. points: dict(lat, lon, value, name, tip, state[top|on|off]) — 파란 원(value) + 흰 이름표(name).
+    배경은 OpenStreetMap 기본 지도(키 불필요, 한글 지명, 컬러). CARTO는 이제 키가 필요하고 Esri는 서울 데이터가 없어서 이걸 쓴다."""
+    data = map_data(points, dest, stations, note)
+    components.html(f"""
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+{map_css(height)}<div id="m"></div><div class="note" id="note"></div>
 <script>
 const D={data};
-const map=L.map('m',{{zoomControl:false,scrollWheelZoom:true}});
+const map=L.map('m',{{zoomControl:false,scrollWheelZoom:true,minZoom:10,maxBounds:[[37.38,126.70],[37.75,127.27]],maxBoundsViscosity:1}});  // 서울만
 L.control.zoom({{position:'topright'}}).addTo(map);
 L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{attribution:'&copy; OpenStreetMap',maxZoom:19}}).addTo(map);
 const pts=[];
@@ -309,6 +323,7 @@ with rail_col, st.container(key="rail"):
 page = ss.page
 
 # 공통 조건 (필터 줄에서 바꾼다. 값은 session_state에 남아 화면을 옮겨도 유지)
+level = ss.get("level", "구")
 room = ss.get("room", "원룸")
 kind = ss.get("kind", "월세")
 max_commute = ss.get("commute", 45)
@@ -323,6 +338,9 @@ else:
 
 with body, st.container(key="fb", horizontal=True):
     if page == "동네 찾기":
+        with st.container(key="on_level"), st.popover(f"{level} 단위"):
+            level = st.radio("보기 단위", ["구", "동"], key="level", horizontal=True,
+                             help="동: 같은 구 안에서도 동마다 다른 가격·통학 시간을 따로 봐요")
         with st.container(key="on_kind"), st.popover(f"{kind}"):
             kind = st.radio("계약", ["월세", "전세"], key="kind", horizontal=True)
         with st.popover(f"{room}"):
@@ -383,7 +401,7 @@ if ready:
     else:
         body.warning("장소를 찾지 못했어요. 다른 이름이나 가까운 지하철역 이름으로 입력해 보세요.")
         st.stop()
-    dest = {"lat": lat, "lon": lon, "label": place.strip(),
+    dest = {"lat": lat, "lon": lon, "label": esc(place.strip()),
             "stn": {"lat": float(coords.lat[station]), "lon": float(coords.lon[station]), "name": f"{station}역"}}
     hint.html(f'<span class="db-hint">· {station}역 도보 {walk:.0f}분{" ⚠️" if walk > 25 else ""}</span>')
     regions["commute_min"] = (regions.region.map(region_commute(subway, station)) + walk).round()
@@ -393,10 +411,21 @@ else:
     regions = SAMPLE
     hint.html('<span class="db-hint">· 예시 데이터</span>')
 
-# 순위의 '가격' = 고른 방·계약의 실제 중앙값을 환산월세로 (전세는 월세 0이라 보증금 이자만). AI 예측값은 표에 따로.
-regions = regions.assign(model_rent=regions.pred_rent, pred_rent=converted_rent(regions.deposit_med, regions.rent_med))
-ok = regions[(regions.deposit_med <= max_deposit) & (regions.rent_med <= max_rent)]
-ranked = score_regions(ok, budget=float("inf"), max_commute=max_commute, weights=weights)
+def rank_view(df):
+    """순위의 '가격' = 고른 방·계약의 실제 중앙값을 환산월세로 (전세는 월세 0이라 보증금 이자만). AI 예측값은 표에 따로."""
+    df = df.assign(model_rent=df.pred_rent, pred_rent=converted_rent(df.deposit_med, df.rent_med))
+    ok = df[(df.deposit_med <= max_deposit) & (df.rent_med <= max_rent)]
+    return df, score_regions(ok, budget=float("inf"), max_commute=max_commute, weights=weights)
+
+
+regions, ranked = rank_view(regions)
+by_dong = page == "동네 찾기" and level == "동" and ready and DONGS.exists() and DEALS_DONG.exists()
+if by_dong:  # 동 단위: 동 위치 → 가까운 역(도보) → 지하철 → 목적지 역(도보). '동네 찾기' 화면에서만 바꾼다.
+    dongs = pd.read_csv(DONGS)
+    dongs["commute_min"] = (dongs.station.map(subway.times_from(station)) + dongs.walk_min + walk).round()
+    dstats = pd.read_csv(DEALS_DONG).query("room == @room and kind == @kind and deals >= @MIN_DEALS")
+    dongs = dongs.dropna(subset=["commute_min"]).merge(dstats.drop(columns=["room", "kind"]), on=["gu", "dong"])
+    regions, ranked = rank_view(dongs.assign(region=dongs.gu + " " + dongs.dong))
 
 
 def svg_img(svg: str, cls: str = "", style: str = "") -> str:
@@ -451,8 +480,10 @@ def compare_listings():
 
 
 SRC = ("보증금·월세: 서울특별시 전월세가 정보(서울 열린데이터광장, 아파트 제외) 최근 12개월 실제 계약 — 방은 면적으로 구분"
-       "(원룸 33㎡ 이하, 투룸 33~66㎡), 보증금은 가운데 50% 범위, 월세는 중앙값. 통학: 대표역까지 서울교통공사 역간 소요시간"
-       "(2024-08) + 환승 + 목적지 도보. 편의시설: 소상공인시장진흥공단 상가정보(2026-09). 위치 검색·지도: OpenStreetMap.")
+       "(원룸 33㎡ 이하, 투룸 33~66㎡), 보증금은 가운데 50% 범위, 월세는 중앙값. 통학: 구 단위는 구 대표역, 동 단위는 "
+       "동 위치에서 가장 가까운 역까지 도보 + 서울교통공사 역간 소요시간(2024-08) + 환승 + 목적지 도보. 동 위치·편의시설: "
+       f"소상공인시장진흥공단 상가정보(2026-09, 동 위치 = 그 동 상가 좌표 중앙값). 동 단위는 최근 12개월 거래 {MIN_DEALS}건 "
+       "이상인 동만. 위치 검색·지도: OpenStreetMap.")
 MODEL_NOTE = (f"AI 예측 시세: Gradient Boosting 환산월세 예측(계약 {price['period'].replace('~', '–')}, 최근 계약 20% 검증 "
               f"MAE {price['mae']:.1f}만 원) · 참고 정보" if price else "가격 모델이 없어 시세 비교는 생략했어요.")
 
@@ -469,6 +500,8 @@ if page == "동네 찾기":
             shown = shown.sort_values(["pred_rent", "commute_min"])
         elif order == "가까운순":
             shown = shown.sort_values(["commute_min", "pred_rent"])
+        if by_dong:
+            shown = shown.head(DONG_SHOWN)
         if ranked.empty:
             st.html('<div class="db-note">조건에 맞는 동네가 없어요. 위 필터에서 보증금·월세·통학 시간을 늘려 보세요.</div>')
         with st.container(height=690, border=False):
@@ -478,6 +511,7 @@ if page == "동네 찾기":
                 + '</div><div>'
                 f'<div class="db-pr">{f"월세 {r.deposit_med:,.0f}/{r.rent_med:.0f}" if r.rent_med else "전세 " + won(r.deposit_med)}</div>'
                 f'<div class="db-l1">{esc(r.region)}{" · " + esc(r.station) + "역 근처" if "station" in r else ""}'
+                f'{f" (도보 {r.walk_min:.0f}분)" if "walk_min" in r else ""}'
                 f' · {"보증금" if r.rent_med else "전세금"} {deposit_text(r)}</div>'
                 f'<div class="db-l1">{room} · 통학 {r.commute_min:.0f}분{f" · 거래 {r.deals:,.0f}건" if "deals" in r else ""}</div>'
                 f'<div class="db-l2">편의점·마트·병원 {r.amenity_cnt:,.0f}곳</div>'
@@ -488,15 +522,16 @@ if page == "동네 찾기":
             rank_of = {g: i for i, g in enumerate(ranked.region)}
             who = esc(place.strip()) or "직장·학교"
             pts = []
-            for _, r in regions.iterrows():
+            for _, r in (ranked.head(DONG_SHOWN) if by_dong else regions).iterrows():
                 k = rank_of.get(r.region)
-                pts.append({"lat": r.lat, "lon": r.lon, "name": r.region,
+                pts.append({"lat": r.lat, "lon": r.lon, "name": r.dong if by_dong else r.region,
                             "value": f"{r.rent_med:.0f}만" if r.rent_med else won(r.deposit_med),
                             "state": "off" if k is None else "top" if k < 3 else "on",
                             "tip": f"<b>{f'추천 {k + 1}위 ' if k is not None else '조건 밖 · '}{r.region}</b><br>{room} "
                                    f"{price_text(r)}<br>🚇 {who}까지 {r.commute_min:.0f}분 ({r.station}역) · 거래 {r.deals:,.0f}건"})
             leaflet_map(pts, dest, note="원 안의 숫자 = " + ("원룸 " if room == "원룸" else "투룸 ")
-                        + ("월세 중앙값" if kind == "월세" else "전세금 중앙값") + " · 회색 = 조건 밖 · 마커에 마우스를 올리면 자세히")
+                        + ("월세 중앙값" if kind == "월세" else "전세금 중앙값")
+                        + (f" · 추천 상위 {DONG_SHOWN}개 동" if by_dong else " · 회색 = 조건 밖") + " · 마커에 마우스를 올리면 자세히")
         else:
             st.info("실제 데이터를 빌드하면 여기에 서울 지도가 보여요 (scripts/build_data.py).")
     with body, st.container(key="foot"):
