@@ -57,3 +57,50 @@ def test_osm_subway_map_dedups_ways_clips_and_merges_stops():
     m = osm_subway_map(els)
     assert m["lines"] == {"2": [[[37.5, 127.0], [37.51, 127.01]]]}
     assert m["stations"] == [{"name": "가", "lat": 37.51, "lon": 127.0}]
+
+
+def test_osm_subway_map_routes_keep_stop_order_and_skip_express():
+    from kkc.commute.subway import osm_subway_map
+    stops = [{"type": "node", "ref": i, "role": "stop", "lat": 37.5 + i / 100, "lon": 127.0} for i in (1, 2, 3)]
+    els = [{"type": "relation", "tags": {"ref": "1", "name": "1호선: 가 → 다"}, "members": stops},
+           {"type": "relation", "tags": {"ref": "1", "name": "1호선: 가 → 다 급행"}, "members": [stops[0], stops[2]]},
+           {"type": "relation", "tags": {"ref": "1", "name": "1호선: 가 → 다"}, "members": stops}]  # 같은 순서는 한 번만
+    els += [{"type": "node", "id": i, "lat": 37.5 + i / 100, "lon": 127.0, "tags": {"name": n}}
+            for i, n in ((1, "가"), (2, "나"), (3, "다"))]
+    assert osm_subway_map(els)["routes"] == {"1": [[["가", 37.51, 127.0], ["나", 37.52, 127.0], ["다", 37.53, 127.0]]]}
+
+
+def test_add_osm_routes_fills_missing_stations_by_position():
+    from kkc.commute.subway import add_osm_routes
+    g = SubwayGraph()
+    g.add_segment("1", "청량리", "제기동", 2)  # 서울교통공사 구간: 약 1.11km에 2분
+    g.add_segment("6", "석계", "돌곶이", 2)
+    coords = pd.DataFrame({"lat": [37.580, 37.590, 37.615, 37.610], "lon": [127.0, 127.0, 127.066, 127.056]},
+                          index=["청량리", "제기동", "석계", "돌곶이"])
+    route = [["청량리역", 37.5801, 127.0], ["회기", 37.600, 127.0], ["석계", 37.6151, 127.066]]  # 이름이 달라도 300m 안이면 같은 역
+    coords = add_osm_routes(g, coords, {"1": [route]})
+    assert "회기" in coords.index and "청량리역" not in coords.index
+    t = g.times_from("청량리")
+    assert t["회기"] == pytest.approx(2 / 1.11 * 2.22, rel=0.05)  # 2.22km × 서울교통공사 평균 분/km
+    assert t["돌곶이"] > t["석계"]  # 새 1호선 석계 ↔ 기존 6호선 석계 환승으로 이어진다
+
+
+def test_nearest_station_by_walk_uses_route_distance_and_falls_back():
+    from kkc.commute.subway import nearest_station_by_walk
+    coords = pd.DataFrame({"lat": [37.600, 37.590], "lon": [127.0, 127.0]}, index=["산너머", "회기"])
+    by_road = lambda lat, lon, pts: [3000 if p[0] == 37.600 else 900 for p in pts]  # noqa: E731
+    assert nearest_station_by_walk(37.597, 127.0, coords, by_road) == ("회기", pytest.approx(900 / 67))
+
+    def offline(*_):
+        raise OSError
+    st, _ = nearest_station_by_walk(37.597, 127.0, coords, offline)
+    assert st == "산너머"  # 경로를 못 받으면 직선 거리로
+
+
+def test_add_osm_routes_matches_parenthesized_name():
+    from kkc.commute.subway import add_osm_routes
+    g = SubwayGraph()
+    g.add_segment("8", "잠실", "석촌", 2)
+    coords = pd.DataFrame({"lat": [37.5133, 37.5056], "lon": [127.1001, 127.1069]}, index=["잠실", "석촌"])
+    coords = add_osm_routes(g, coords, {"8": [[["잠실(송파구청)", 37.5160, 127.1030], ["석촌", 37.5056, 127.1069]]]})
+    assert "잠실(송파구청)" not in coords.index  # 400m 떨어져 있어도 괄호 뗀 이름이 같으면 같은 역

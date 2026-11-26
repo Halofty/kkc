@@ -26,7 +26,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from kkc.commute.subway import nearest_station, region_commute  # noqa: E402
+from kkc.commute.subway import nearest_station_by_walk, region_commute  # noqa: E402
 from kkc.price.model import BTYPES, ROOMS, converted_rent, price_gap  # noqa: E402
 from kkc.ranking.rank import score_regions  # noqa: E402
 from kkc.ui import gap_label, pick_photo  # noqa: E402
@@ -199,6 +199,35 @@ def geocode(query: str):
     return (float(hit[0]["lat"]), float(hit[0]["lon"]), hit[0]["display_name"]) if hit else None
 
 
+def walk_m(lat: float, lon: float, pts: list) -> list:
+    """(lat, lon) → 각 역까지 실제 도보 경로 길이(m). OSM 도보 라우팅(routing.openstreetmap.de, 키 불필요)."""
+    coords = ";".join(f"{lo},{la}" for la, lo in [(lat, lon), *pts])
+    req = urllib.request.Request(f"https://routing.openstreetmap.de/routed-foot/table/v1/foot/{coords}?sources=0"
+                                 "&annotations=distance", headers={"User-Agent": "kkc-room-finder-demo"})
+    r = json.load(urllib.request.urlopen(req, timeout=8))
+    if r.get("code") != "Ok" or None in r["distances"][0]:
+        raise ValueError(r.get("code"))
+    return r["distances"][0][1:]
+
+
+@st.cache_data(show_spinner=False)
+def walk_path(lat: float, lon: float, slat: float, slon: float) -> list | None:
+    """목적지 → 역 실제 도보 경로 [[lat, lon], ...] (지도에 '가는 길'로). 못 받으면 None → 직선 점선."""
+    req = urllib.request.Request(f"https://routing.openstreetmap.de/routed-foot/route/v1/foot/{lon},{lat};{slon},{slat}"
+                                 "?overview=full&geometries=geojson", headers={"User-Agent": "kkc-room-finder-demo"})
+    try:
+        r = json.load(urllib.request.urlopen(req, timeout=8))
+        return [[la, lo] for lo, la in r["routes"][0]["geometry"]["coordinates"]]
+    except (OSError, ValueError, KeyError, IndexError):
+        return None
+
+
+@st.cache_data(show_spinner="가까운 역까지 걷는 길 찾는 중…")
+def walk_station(lat: float, lon: float, coords: pd.DataFrame) -> tuple[str, float]:
+    """직선이 아니라 실제 걷는 길로 가장 가까운 역 (산·철길 너머 역을 고르지 않게). 오프라인이면 직선 거리로."""
+    return nearest_station_by_walk(lat, lon, coords, walk_m)
+
+
 def won(v: float) -> str:
     """만원 단위 → '1,000만' / '2.5억'. 1000만 이상은 100만 단위로 반올림(실제 계약값 6,793만 → 6,800만)."""
     if v >= 10000:
@@ -304,7 +333,9 @@ if(D.dest){{
   pts.push([D.dest.lat,D.dest.lon]);
   const s=D.dest.stn;
   if(s){{
-    L.polyline([[D.dest.lat,D.dest.lon],[s.lat,s.lon]],{{color:'#555',weight:2.5,dashArray:'2 7',lineCap:'round'}}).addTo(map);
+    const walk=D.dest.path||[[D.dest.lat,D.dest.lon],[s.lat,s.lon]];  // 가는 길: 호선(색 실선)과 다르게 검은 동그라미 점선
+    L.polyline(walk,{{color:'#fff',weight:10,dashArray:'0.1 11',lineCap:'round',interactive:false}}).addTo(map);
+    L.polyline(walk,{{color:'#222',weight:6,dashArray:'0.1 11',lineCap:'round'}}).bindTooltip(`${{s.name}}까지 걷는 길`,{{sticky:true}}).addTo(map);
     if(!D.stations.some(x=>x.name===s.name)) L.marker([s.lat,s.lon],{{icon:L.divIcon({{className:'',iconSize:[120,18],iconAnchor:[9,9],html:`<div class="stn"><i></i>${{s.name}}</div>`}})}}).addTo(map);
     pts.push([s.lat,s.lon]);
   }}
@@ -425,7 +456,7 @@ if ready:
     hit = geocode(place.strip()) if place.strip() else None
     if hit:
         lat, lon, addr = hit
-        station, walk = nearest_station(lat, lon, coords)
+        station, walk = walk_station(lat, lon, coords)
     elif place.strip().removesuffix("역") in coords.index:  # 검색 실패(오프라인 등) 시 역 이름으로라도
         station, walk = place.strip().removesuffix("역"), 0.0
         lat, lon = coords.lat[station], coords.lon[station]
@@ -433,7 +464,8 @@ if ready:
         body.warning("장소를 찾지 못했어요. 다른 이름이나 가까운 지하철역 이름으로 입력해 보세요.")
         st.stop()
     dest = {"lat": lat, "lon": lon, "label": esc(place.strip()),
-            "stn": {"lat": float(coords.lat[station]), "lon": float(coords.lon[station]), "name": f"{station}역"}}
+            "stn": {"lat": float(coords.lat[station]), "lon": float(coords.lon[station]), "name": f"{station}역"},
+            "path": walk_path(lat, lon, float(coords.lat[station]), float(coords.lon[station]))}
     hint.html(f'<span class="db-hint">· {station}역 도보 {walk:.0f}분{" ⚠️" if walk > 25 else ""}</span>')
     regions["commute_min"] = (regions.region.map(region_commute(subway, station)) + walk).round()
     deals = pd.read_csv(DEALS).query("room == @room and kind == @kind").drop(columns=["room", "kind"])

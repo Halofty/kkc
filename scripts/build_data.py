@@ -13,6 +13,7 @@
   data/processed/deals_dong.csv  동 × 원룸/투룸 × 월세/전세 통계
 """
 import argparse
+import json
 import pickle
 import sys
 from pathlib import Path
@@ -22,7 +23,8 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from kkc.commute.subway import GU_STATION, load_seoul_metro, load_station_coords, nearest_station  # noqa: E402
+from kkc.commute.subway import (GU_STATION, add_osm_routes, load_seoul_metro, load_station_coords,  # noqa: E402
+                                nearest_station)
 from kkc.price.model import load_rent, region_deal_stats, region_rents, train  # noqa: E402
 from kkc.ranking.rank import dong_table  # noqa: E402
 
@@ -44,9 +46,16 @@ joblib.dump({"model": model, "mae": mae, "period": period, "latest_ym": int(deal
 print(f"월세 모델: 거래 {len(deals):,}건 ({period}), 검증 MAE {mae:.1f}만원")
 
 graph = load_seoul_metro(args.dist, args.transfer)
+coords = load_station_coords(args.coords)
+osm = ROOT / "data/processed/subway_map.json"  # scripts/fetch_subway_map.py — 1호선 코레일 구간(회기·용산 등)·9호선 보강
+if osm.exists():
+    n = len(coords)
+    coords = add_osm_routes(graph, coords, json.loads(osm.read_text(encoding="utf-8"))["routes"])
+    print(f"OSM 노선으로 서울교통공사 파일에 없는 역 {len(coords) - n}곳 추가 (역간 시간은 거리로 추정)")
+else:
+    print("⚠ data/processed/subway_map.json 없음 → 1호선 코레일 구간·9호선 역 빠짐 (python scripts/fetch_subway_map.py 먼저)")
 with open(ROOT / "models/subway.pkl", "wb") as f:
     pickle.dump(graph, f)
-coords = load_station_coords(args.coords)
 coords.to_csv(ROOT / "data/processed/stations.csv")
 no_xy = sorted({n for n, _ in graph.adj} - set(coords.index))
 print(f"역 좌표: {len(coords)}곳" + (f", 그래프 역 중 좌표 없음 {no_xy}" if no_xy else ""))

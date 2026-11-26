@@ -22,18 +22,18 @@ streamlit run app/streamlit_app.py
 | 1_8호선 역사 좌표(위경도) CSV | 서울교통공사 (공공데이터포털) |
 | 상가(상권)정보 서울 CSV | 공공데이터포털 (소상공인시장진흥공단) |
 
-`seoul_data/`에 있는 파일로 바로 빌드 (약 1분):
+`seoul_data/`에 있는 파일로 바로 빌드 (약 1분). 먼저 노선 데이터를 받는다 — 지도 호선·역 이름 + 서울교통공사 파일에 없는 1호선 코레일 구간(회기·용산 등)·9호선을 통학 계산에 넣는다 (역간 시간은 거리로 추정):
 ```bash
+python scripts/fetch_subway_map.py   # OpenStreetMap → data/processed/subway_map.json
 python scripts/build_data.py --rent "seoul_data/서울특별시_전월세가_2025.csv"     --dist "seoul_data/서울교통공사 역간거리 및 소요시간_240810.csv"     --transfer "seoul_data/서울교통공사_환승역거리 소요시간 정보_20260831.csv"     --coords "seoul_data/서울교통공사_1_8호선 역사 좌표(위경도) 정보_20250814.csv"     --stores "seoul_data/소상공인시장진흥공단_상가(상권)정보_서울_202609.csv"
 ```
-결과(2026-11-18 빌드): 거래 639,959건(계약 2023-09~2026-02), 월세 모델 MAE 15.2만원(최근 계약 20% 검증, 기존 설정 15.9), 지하철 240역, 25개 구.
+결과(2026-11-18 빌드): 거래 639,959건(계약 2023-09~2026-02), 월세 모델 MAE 15.2만원(최근 계약 20% 검증, 기존 설정 15.9), 지하철 240역, 25개 구. (2026-11-26 OSM 노선 보강 후 403역)
 
 다른 파일로 빌드할 때:
 ```bash
 python scripts/build_data.py --rent data/raw/rent_*.csv --dist data/raw/역간거리.csv \
     --transfer data/raw/환승.csv --coords data/raw/역좌표.csv --stores data/raw/상가_서울.csv
 python scripts/train_fov.py data/raw/photos --epochs 10   # 0.5x·1x 실내 사진 (EXIF 유지)
-python scripts/fetch_subway_map.py                         # 지도용 1~9호선 선로·역 이름 (OpenStreetMap) → data/processed/subway_map.json
 ```
 결과는 `models/`, `data/processed/`(구: regions·deals, 동: dongs·deals_dong, 역: stations)에 생기고 커밋하지 않는다.
 
