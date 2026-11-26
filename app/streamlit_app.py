@@ -29,13 +29,14 @@ sys.path.insert(0, str(ROOT / "src"))
 from kkc.commute.subway import nearest_station, region_commute  # noqa: E402
 from kkc.price.model import BTYPES, ROOMS, converted_rent, price_gap  # noqa: E402
 from kkc.ranking.rank import score_regions  # noqa: E402
-from kkc.ui import gap_label  # noqa: E402
+from kkc.ui import gap_label, pick_photo  # noqa: E402
 from kkc.vision.fov import (STD_FOV_DEG, crop_ratio, load_fov_model, predict_fov,  # noqa: E402
                             restore_standard_view, wide_angle_flag)
 
 REGIONS, STATIONS, DEALS, DONGS, DEALS_DONG, PRICE, SUBWAY, FOV = (ROOT / p for p in (
     "data/processed/regions.csv", "data/processed/stations.csv", "data/processed/deals.csv", "data/processed/dongs.csv",
     "data/processed/deals_dong.csv", "models/price.joblib", "models/subway.pkl", "models/fov.pt"))
+PHOTOS = ROOT / "data/raw/listing_photos"  # scripts/unsplash_listings.py 가 받은 예시 매물 사진 (없으면 일러스트)
 MIN_DEALS = 10  # 동 단위는 최근 12개월 거래가 이보다 적으면 통계가 들쭉날쭉해서 뺀다
 DONG_SHOWN = 40  # 동 단위 목록·지도에 보여줄 상위 개수 (400곳을 다 그리면 지도가 덮인다)
 SAMPLE = pd.DataFrame({
@@ -53,6 +54,9 @@ SEOUL_BOX = "126.76,37.70,127.19,37.42"  # 위치 검색을 서울 안으로 한
 PAGES = ["동네 찾기", "매물 비교", "사진 화각"]
 PAGE_ICON = {"동네 찾기": ":material/home:", "매물 비교": ":material/view_column:", "사진 화각": ":material/photo_camera:"}
 BLUE = "#326CF9"
+LINE_COLOR = {"1": "#0052A4", "2": "#00A84D", "3": "#EF7C1C", "4": "#00A5DE",  # 서울 지하철 호선 표준색
+              "5": "#996CAC", "6": "#CD7C2F", "7": "#747F00", "8": "#E6186C", "9": "#BDB092"}
+SUBWAY_MAP = ROOT / "data/processed/subway_map.json"  # scripts/fetch_subway_map.py (OSM 실제 선로 + 역 이름)
 FILTER_KEYS = ["level", "kind", "room", "dep_m", "rent_원룸", "rent_투룸", "dep_j_원룸", "dep_j_투룸", "commute", "w", "order",
                "order2", "pick3"]
 
@@ -137,6 +141,9 @@ header[data-testid="stHeader"], [data-testid="stToolbar"] {{ display: none; }}
   flex-direction: column; align-items: center; justify-content: center; font-weight: 800; font-size: 34px; line-height: 1.15; }}
 .db-sq small {{ font-size: 13px; font-weight: 600; color: #656565; }}
 .db-room {{ flex: none; border-radius: 4px; display: block; }}
+.db-pic {{ width: 140px; height: 140px; object-fit: cover; border-radius: 4px; display: block; }}
+.db-cr {{ display: block; width: 140px; margin-top: 4px; font-size: 11px; color: #979797 !important; text-decoration: none;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }}
 .db-ph {{ width: 140px; height: 140px; flex: none; border-radius: 4px; background: #F3F3F3; color: #B0B0B0; display: flex;
   flex-direction: column; align-items: center; justify-content: center; font-size: 12px; gap: 6px; }}
 .db-pr {{ font-size: 20px; font-weight: 700; color: #222; margin: 2px 0 6px; }}
@@ -234,13 +241,26 @@ html,body,#m{{height:{height}px;margin:0;font-family:'Pretendard Variable',Prete
 .leaflet-bar a{{width:40px!important;height:40px!important;line-height:40px!important;font-size:20px!important;color:#444!important}}
 .leaflet-bar{{border:1px solid #DADADA!important;border-radius:4px!important;box-shadow:none!important}}
 .leaflet-tooltip{{font-family:inherit;font-size:12.5px;border-radius:4px}}
+.leaflet-tile-pane{{filter:saturate(.35) brightness(1.04)}}  /* 배경을 흐리게 해서 호선 색이 눈에 띄게 */
+.sl{{position:absolute;left:7px;top:-8px;white-space:nowrap;font-size:11.5px;font-weight:700;color:#333;
+  text-shadow:-1px -1px 0 #fff,1px -1px 0 #fff,-1px 1px 0 #fff,1px 1px 0 #fff}}
 
 </style>"""
 
 
+@st.cache_data
+def subway_map() -> dict:
+    """지도에 깔 호선 선로 [{line, color, segs}] + 역 [{name, lat, lon}]. 파일을 아직 안 받았으면 빈 값."""
+    if not SUBWAY_MAP.exists():
+        return {"lines": [], "subway_stations": []}
+    m = json.loads(SUBWAY_MAP.read_text(encoding="utf-8"))
+    return {"lines": [{"line": k, "color": LINE_COLOR[k], "segs": v} for k, v in sorted(m["lines"].items()) if k in LINE_COLOR],
+            "subway_stations": m["stations"]}
+
+
 def map_data(points, dest, stations, note) -> str:
     # </script> 같은 문자열이 들어와도 스크립트 밖으로 못 나가게
-    return json.dumps({"points": points, "dest": dest, "stations": list(stations), "note": note},
+    return json.dumps({"points": points, "dest": dest, "stations": list(stations), "note": note, **subway_map()},
                       ensure_ascii=False).replace("</", "<\\/")
 
 
@@ -258,6 +278,16 @@ const D={data};
 const map=L.map('m',{{zoomControl:false,scrollWheelZoom:true,minZoom:10,maxBounds:[[37.38,126.70],[37.75,127.27]],maxBoundsViscosity:1}});  // 서울만
 L.control.zoom({{position:'topright'}}).addTo(map);
 L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{attribution:'&copy; OpenStreetMap',maxZoom:19}}).addTo(map);
+for(const l of D.lines) L.polyline(l.segs,{{color:'#fff',weight:8,opacity:.9,interactive:false}}).addTo(map);  // 흰 테두리 먼저
+for(const l of D.lines) L.polyline(l.segs,{{color:l.color,weight:5,opacity:.95}}).bindTooltip(l.line+'호선',{{sticky:true}}).addTo(map);
+const sl=L.layerGroup();  // 역 점 + 이름은 확대했을 때만 (네이버처럼, 다 펴면 글자가 겹친다)
+const busy=new Set([...D.stations.map(x=>x.name),D.dest&&D.dest.stn&&D.dest.stn.name]);  // 파란 이름표가 이미 있는 역
+for(const s of D.subway_stations){{
+  if(busy.has(s.name+'역')) continue;
+  L.circleMarker([s.lat,s.lon],{{radius:4,color:'#555',weight:1.5,fillColor:'#fff',fillOpacity:1,interactive:false}}).addTo(sl);
+  L.marker([s.lat,s.lon],{{interactive:false,icon:L.divIcon({{className:'',iconSize:[0,0],html:`<div class="sl">${{s.name}}</div>`}})}}).addTo(sl);
+}}
+const showSl=()=>map.getZoom()>=13?sl.addTo(map):sl.remove();
 const pts=[];
 for(const s of D.stations){{
   L.marker([s.lat,s.lon],{{icon:L.divIcon({{className:'',iconSize:[120,18],iconAnchor:[9,9],html:`<div class="stn"><i></i>${{s.name}}</div>`}})}}).addTo(map);
@@ -280,6 +310,7 @@ if(D.dest){{
   }}
 }}
 if(pts.length) map.fitBounds(pts,{{padding:[60,60],maxZoom:14}}); else map.setView([37.56,126.99],11);
+showSl(); map.on('zoomend',showSl);  // 첫 화면이 잡힌 뒤에 건다 (그 전엔 렌더러가 없어 점 추가가 터진다)
 if(D.note) document.getElementById('note').innerHTML=D.note; else document.getElementById('note').remove();
 </script>""", height=height)
 
@@ -447,6 +478,21 @@ def room_svg(i: int) -> str:
             '<rect x="26" y="80" width="40" height="20" rx="2" fill="#B89C82"/></svg>', "db-room")
 
 
+@st.cache_data
+def photo_src(file: str) -> str:
+    return "data:image/webp;base64," + base64.b64encode((PHOTOS / file).read_bytes()).decode()
+
+
+def room_thumb(i: int) -> str:
+    """매물 썸네일: 받아 둔 Unsplash 예시 사진 + 작가 크레딧(Unsplash 가이드라인), 없으면 일러스트."""
+    m = PHOTOS / "_pool/manifest.json"
+    p = pick_photo(json.loads(m.read_text(encoding="utf-8")), room, i) if m.exists() else None
+    if p is None:
+        return room_svg(i)
+    return (f'<div class="db-room"><img class="db-pic" src="{photo_src(p["file"])}">'
+            f'<a class="db-cr" href="{esc(p["author_url"])}" target="_blank">© {esc(p["author"])} / Unsplash</a></div>')
+
+
 def sample_room(crop: float = 1.0) -> str:
     """광각으로 찍은 듯한 예시 방 그림. crop<1이면 가운데를 잘라 표준 렌즈 시야처럼 보여 준다."""
     w, h = 600 * crop, 400 * crop
@@ -572,7 +618,7 @@ elif page == "매물 비교":
                 tags += f'<span class="db-tg {tone}">{text}</span>'
                 pred = (f'<div class="db-l2">AI 예측 {r.pred_rent - r["시세 대비(만원)"]:.1f}만 / '
                         f'환산 {r.pred_rent:.1f}만</div>')
-            cards += (f'<div class="db-it">{room_svg(r.name)}<div>'
+            cards += (f'<div class="db-it">{room_thumb(r.name)}<div>'
                       f'<div class="db-pr">월세 {li.deposit:,.0f}/{li.rent:,.0f}</div>'
                       f'<div class="db-l1">{room} · {li.area_m2:g}㎡ · {li.floor:g}층 · {li.build_year:g}년</div>'
                       f'<div class="db-l1">{esc(li.gu)} {esc(li.dong)} · 통학 {r.commute_min:.0f}분</div>'

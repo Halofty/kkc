@@ -124,3 +124,27 @@ class SubwayGraph:
         for (name, _), d in dist.items():
             best[name] = min(d, best.get(name, float("inf")))
         return best
+
+
+
+SEOUL_BBOX = (37.38, 126.70, 37.75, 127.27)  # 남, 서, 북, 동 — 앱 지도가 보여 주는 범위
+
+
+def osm_subway_map(elements: list, bbox=SEOUL_BBOX) -> dict:
+    """Overpass 결과(노선 relation `out geom` + 정차 위치 node) → 지도용 {lines: {호선: [선로 좌표열]}, stations: [{name, lat, lon}]}.
+    같은 선로(way)는 한 번만, 범위 밖 선로·역은 뺀다. 같은 이름의 정차 위치(방향별)는 평균 좌표 한 점으로."""
+    s, w, n, e = bbox
+    inside = lambda p: s <= p["lat"] <= n and w <= p["lon"] <= e  # noqa: E731
+    lines, seen, stops = defaultdict(list), set(), defaultdict(list)
+    for el in elements:
+        if el["type"] == "relation":
+            for m in el["members"]:
+                geo = m.get("geometry") or []
+                if m["type"] == "way" and m["role"] == "" and m["ref"] not in seen and any(map(inside, geo)):
+                    seen.add(m["ref"])
+                    lines[el["tags"]["ref"]].append([[round(p["lat"], 5), round(p["lon"], 5)] for p in geo])
+        elif el["type"] == "node" and "name" in el.get("tags", {}) and inside(el):
+            stops[el["tags"]["name"]].append((el["lat"], el["lon"]))
+    stations = [{"name": k, "lat": round(sum(p[0] for p in v) / len(v), 5), "lon": round(sum(p[1] for p in v) / len(v), 5)}
+                for k, v in stops.items()]
+    return {"lines": dict(lines), "stations": stations}

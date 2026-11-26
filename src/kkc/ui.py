@@ -8,3 +8,9 @@ def gap_label(gap: float, tol: float = 0.5) -> tuple[str, str]:
     if gap > tol:
         return f"시세보다 {gap:.1f}만 원 비싸요", "bad"
     return "시세와 비슷해요", "neutral"
+
+
+def pick_photo(manifest: dict, room: str, i: int) -> dict | None:
+    """i번째 매물 썸네일용 Unsplash 사진 (원룸=main, 투룸=거실 living). 없으면 None."""
+    photos = manifest.get("main" if room == "원룸" else "living") or []
+    return photos[i % len(photos)] if photos else None

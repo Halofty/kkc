@@ -41,3 +41,19 @@ def test_ranking_and_tradeoff():
     assert list(r.region) == ["B", "A"]  # C는 통학 초과
     s = tradeoff_suggestions(df, budget=80, max_commute=30)
     assert s[0] == {"extra_minutes": 10, "monthly_saving": 10.0, "region": "C"}
+
+
+
+def test_osm_subway_map_dedups_ways_clips_and_merges_stops():
+    from kkc.commute.subway import osm_subway_map
+    way = {"type": "way", "ref": 1, "role": "", "geometry": [{"lat": 37.5, "lon": 127.0}, {"lat": 37.51, "lon": 127.01}]}
+    far = {"type": "way", "ref": 2, "role": "", "geometry": [{"lat": 36.8, "lon": 127.1}, {"lat": 36.81, "lon": 127.1}]}
+    stop = {"type": "node", "ref": 9, "role": "stop"}
+    els = [{"type": "relation", "tags": {"ref": "2"}, "members": [way, far, stop]},
+           {"type": "relation", "tags": {"ref": "2"}, "members": [way]},  # 반대 방향 노선이 같은 선로를 또 적는다
+           {"type": "node", "lat": 37.50, "lon": 127.0, "tags": {"name": "가"}},
+           {"type": "node", "lat": 37.52, "lon": 127.0, "tags": {"name": "가"}},  # 방향별 정차 위치 → 평균
+           {"type": "node", "lat": 36.80, "lon": 127.1, "tags": {"name": "천안"}}]  # 서울 밖
+    m = osm_subway_map(els)
+    assert m["lines"] == {"2": [[[37.5, 127.0], [37.51, 127.01]]]}
+    assert m["stations"] == [{"name": "가", "lat": 37.51, "lon": 127.0}]

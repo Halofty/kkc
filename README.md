@@ -33,6 +33,7 @@ python scripts/build_data.py --rent "seoul_data/서울특별시_전월세가_202
 python scripts/build_data.py --rent data/raw/rent_*.csv --dist data/raw/역간거리.csv \
     --transfer data/raw/환승.csv --coords data/raw/역좌표.csv --stores data/raw/상가_서울.csv
 python scripts/train_fov.py data/raw/photos --epochs 10   # 0.5x·1x 실내 사진 (EXIF 유지)
+python scripts/fetch_subway_map.py                         # 지도용 1~9호선 선로·역 이름 (OpenStreetMap) → data/processed/subway_map.json
 ```
 결과는 `models/`, `data/processed/`(구: regions·deals, 동: dongs·deals_dong, 역: stations)에 생기고 커밋하지 않는다.
 
