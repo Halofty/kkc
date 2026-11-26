@@ -38,7 +38,7 @@ REGIONS, STATIONS, DEALS, DONGS, DEALS_DONG, PRICE, SUBWAY, FOV = (ROOT / p for 
     "data/processed/deals_dong.csv", "models/price.joblib", "models/subway.pkl", "models/fov.pt"))
 PHOTOS = ROOT / "data/raw/listing_photos"  # scripts/unsplash_listings.py 가 받은 예시 매물 사진 (없으면 일러스트)
 MIN_DEALS = 10  # 동 단위는 최근 12개월 거래가 이보다 적으면 통계가 들쭉날쭉해서 뺀다
-DONG_SHOWN = 40  # 동 단위 목록·지도에 보여줄 상위 개수 (400곳을 다 그리면 지도가 덮인다)
+DONG_SHOWN = 15  # 동 단위 목록·지도에 보여줄 추천 상위 개수 (400곳을 다 그리면 지도가 덮인다)
 SAMPLE = pd.DataFrame({
     "region": ["관악구", "동작구", "광진구", "마포구", "성북구", "강남구"],
     "pred_rent": [55, 60, 62, 68, 52, 102],
@@ -569,17 +569,17 @@ MODEL_NOTE = (f"AI 예측 시세: Gradient Boosting 환산월세 예측(계약 {
 if page == "동네 찾기":
     col_list, col_map = body.columns([400, 960], gap=None)
     with col_list, st.container(key="list"):
+        shown = ranked.assign(rank=ranked.index + 1)
+        if by_dong:
+            shown = shown.head(DONG_SHOWN)
         with st.container(key="sort"):
             order = st.segmented_control("정렬", ["추천순", "월세 낮은순", "가까운순"], default="추천순", key="order",
                                          label_visibility="collapsed",
-                                         format_func=lambda o: f"추천 동네 {len(ranked)}" if o == "추천순" else o) or "추천순"
-        shown = ranked.assign(rank=ranked.index + 1)
-        if order == "월세 낮은순":
+                                         format_func=lambda o: f"추천 동네 {len(shown)}" if o == "추천순" else o) or "추천순"
+        if order == "월세 낮은순":  # 동 단위는 추천 상위 안에서만 다시 정렬한다
             shown = shown.sort_values(["pred_rent", "commute_min"])
         elif order == "가까운순":
             shown = shown.sort_values(["commute_min", "pred_rent"])
-        if by_dong:
-            shown = shown.head(DONG_SHOWN)
         if ranked.empty:
             st.html('<div class="db-note">조건에 맞는 동네가 없어요. 위 필터에서 보증금·월세·통학 시간을 늘려 보세요.</div>')
         with st.container(height=690, border=False):
