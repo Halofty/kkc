@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import heapq
+import re
 from collections import defaultdict
 
 import pandas as pd
@@ -124,3 +125,86 @@ class SubwayGraph:
         for (name, _), d in dist.items():
             best[name] = min(d, best.get(name, float("inf")))
         return best
+
+
+
+SEOUL_BBOX = (37.38, 126.70, 37.75, 127.27)  # 남, 서, 북, 동 — 앱 지도가 보여 주는 범위
+
+
+def osm_subway_map(elements: list, bbox=SEOUL_BBOX) -> dict:
+    """Overpass 결과(노선 relation `out geom` + 정차 위치 node) → 지도용 {lines: {호선: [선로 좌표열]}, stations: [{name, lat, lon}]}
+    + 그래프 보강용 routes: {호선: [[[역명, lat, lon], ...정차 순서]]} (급행은 역을 건너뛰어서 뺀다).
+    같은 선로(way)는 한 번만, 범위 밖 선로·역은 뺀다. 같은 이름의 정차 위치(방향별)는 평균 좌표 한 점으로."""
+    s, w, n, e = bbox
+    inside = lambda p: s <= p["lat"] <= n and w <= p["lon"] <= e  # noqa: E731
+    lines, seen, stops = defaultdict(list), set(), defaultdict(list)
+    for el in elements:
+        if el["type"] == "relation":
+            for m in el["members"]:
+                geo = m.get("geometry") or []
+                if m["type"] == "way" and m["role"] == "" and m["ref"] not in seen and any(map(inside, geo)):
+                    seen.add(m["ref"])
+                    lines[el["tags"]["ref"]].append([[round(p["lat"], 5), round(p["lon"], 5)] for p in geo])
+        elif el["type"] == "node" and "name" in el.get("tags", {}) and inside(el):
+            stops[el["tags"]["name"]].append((el["lat"], el["lon"]))
+    stations = [{"name": k, "lat": round(sum(p[0] for p in v) / len(v), 5), "lon": round(sum(p[1] for p in v) / len(v), 5)}
+                for k, v in stops.items()]
+    names = {el.get("id"): el["tags"]["name"] for el in elements if el["type"] == "node" and "name" in el.get("tags", {})}
+    routes = defaultdict(list)
+    for el in elements:
+        if el["type"] == "relation" and "급행" not in el["tags"].get("name", ""):
+            seq = [[names[m["ref"]], round(m["lat"], 5), round(m["lon"], 5)] for m in el["members"]
+                   if m["type"] == "node" and m["role"].startswith("stop") and m.get("ref") in names and "lat" in m]
+            if len(seq) > 1 and seq not in routes[el["tags"]["ref"]]:
+                routes[el["tags"]["ref"]].append(seq)
+    return {"lines": dict(lines), "stations": stations, "routes": dict(routes)}
+
+
+def _km(lat1, lon1, lat2, lon2):
+    return (((lat1 - lat2) * 111) ** 2 + ((lon1 - lon2) * 88) ** 2) ** 0.5  # 서울 위도: 위도 1° ≈ 111km, 경도 1° ≈ 88km
+
+
+TRANSFER_MIN = 4  # 새로 붙인 역의 환승 시간 (서울교통공사 환승 파일에 없는 곳)
+
+
+def add_osm_routes(g: SubwayGraph, coords: pd.DataFrame, routes: dict, same_m: float = 300) -> pd.DataFrame:
+    """서울교통공사 파일에 없는 구간(1호선 코레일 구간 회기·용산 등, 9호선)을 OSM 정차 순서로 그래프에 붙이고 늘어난 역 좌표를 돌려준다.
+    같은 역 판단은 이름이 아니라 위치(same_m 안)로 — '서울'/'서울역'처럼 표기가 달라도 묶인다.
+    이미 그래프에 있는 역끼리의 구간은 건드리지 않는다 (공식 시간이 우선)."""
+    # shortcut: 새 구간 시간 = 거리 × 서울교통공사 구간 평균 분/km 추정. 코레일·9호선 역간 시간 데이터가 생기면 그걸로.
+    per_km = pd.Series([w / _km(*coords.loc[a], *coords.loc[b]) for (a, la), nb in g.adj.items() for (b, lb), w in nb
+                        if la == lb and a in coords.index and b in coords.index and _km(*coords.loc[a], *coords.loc[b]) > 0]).median()
+    coords, official = coords.copy(), set(g.adj)  # 처음부터 있던 (역, 호선)
+
+    def match(name, lat, lon):
+        d = _km(coords.lat, coords.lon, lat, lon)
+        base = re.sub(r"\s*\(.*?\)|역$", "", name)  # '잠실(송파구청)' → '잠실'
+        if base in d.index and d[base] < 1:
+            return base
+        if len(d) and d.min() * 1000 <= same_m:
+            return d.idxmin()
+        coords.loc[name] = [lat, lon]
+        return name
+
+    for line, seqs in routes.items():
+        for seq in seqs:
+            ids = [match(*st) for st in seq]
+            for a, b in zip(ids, ids[1:]):
+                for x in (a, b):
+                    if (x, line) not in g.adj:
+                        for other in g.nodes_of(x):
+                            g.add_transfer(x, line, other[1], TRANSFER_MIN)
+                if a != b and not ((a, line) in official and (b, line) in official):
+                    g.add_segment(line, a, b, round(_km(*coords.loc[a], *coords.loc[b]) * per_km, 1))
+    return coords
+
+
+def nearest_station_by_walk(lat: float, lon: float, coords: pd.DataFrame, route, k: int = 6) -> tuple[str, float]:
+    """직선으로 가까운 역 k곳 중 실제 도보 경로가 가장 짧은 역과 도보 분. 산·강·철길을 돌아가는 걸 반영한다.
+    route(lat, lon, [(lat, lon), ...]) → 각 역까지 도보 m. 경로를 못 받으면(OSError) 직선 거리 방식으로."""
+    cand = coords.loc[_km(coords.lat, coords.lon, lat, lon).nsmallest(k).index]
+    try:
+        m = pd.Series(route(lat, lon, list(zip(cand.lat, cand.lon))), index=cand.index, dtype=float)
+    except (OSError, ValueError, KeyError):
+        return nearest_station(lat, lon, coords)
+    return m.idxmin(), float(m.min() / WALK_M_PER_MIN)

@@ -9,3 +9,4 @@ models/
 graphify-out/cache/
 .claude/settings.json.graphify-bak
 seoul_data/
+.streamlit/secrets.toml

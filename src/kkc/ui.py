@@ -32,3 +32,9 @@ def sort_regions(df, key: str, desc: bool = False):
     col, up, down = SORTS[key]
     by = [col] if col == "rank" else [col, "rank"]
     return df.sort_values(by, ascending=[not desc] + [True] * (len(by) - 1)), f"{key} {down if desc else up}"
+
+
+def pick_photo(manifest: dict, room: str, i: int) -> dict | None:
+    """i번째 매물 썸네일용 Unsplash 사진 (원룸=main, 투룸=거실 living). 없으면 None."""
+    photos = manifest.get("main" if room == "원룸" else "living") or []
+    return photos[i % len(photos)] if photos else None

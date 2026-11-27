@@ -36,3 +36,12 @@ def test_sort_regions_both_directions_and_label():
     assert list(out.region) == ["C", "A", "B"] and label == "보증금 낮은순"
     out, label = sort_regions(df, "추천")
     assert list(out.region) == ["A", "B", "C"] and label == "추천 높은순"
+
+
+def test_pick_photo_by_room_cycles_and_falls_back():
+    from kkc.ui import pick_photo
+    m = {"main": [{"id": "a"}, {"id": "b"}], "living": [{"id": "c"}]}
+    assert pick_photo(m, "원룸", 0)["id"] == "a"
+    assert pick_photo(m, "원룸", 3)["id"] == "b"  # 사진보다 매물이 많으면 돌려 쓴다
+    assert pick_photo(m, "투룸", 1)["id"] == "c"
+    assert pick_photo({}, "원룸", 0) is None  # 사진을 안 받았으면 일러스트로

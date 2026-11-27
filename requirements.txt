@@ -1,5 +1,6 @@
 numpy
 pandas
+openpyxl        # 서울시 버스 정류소 xlsx 읽기
 scikit-learn
 lightgbm        # Learning-to-Rank (lambdarank)
 torch
