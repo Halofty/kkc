@@ -27,7 +27,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from kkc.commute.subway import nearest_station_by_walk, region_commute  # noqa: E402
-from kkc.price.model import BTYPES, ROOMS, converted_rent, price_gap  # noqa: E402
+from kkc.price.model import BTYPES, ROOMS, band_for, converted_rent, price_gap  # noqa: E402
 from kkc.ranking.rank import score_regions, tradeoff_suggestions  # noqa: E402
 from kkc.ui import SORTS, gap_label, pick_photo, sort_regions, tradeoff_lines  # noqa: E402
 from kkc.vision.fov import (STD_FOV_DEG, crop_ratio, load_fov_model, predict_fov,  # noqa: E402
@@ -595,7 +595,13 @@ SRC = ("보증금·월세: 서울특별시 전월세가 정보(서울 열린데�
        f"소상공인시장진흥공단 상가정보(2026-09, 동 위치 = 그 동 상가 좌표 중앙값). 동 단위는 최근 12개월 거래 {MIN_DEALS}건 "
        "이상인 동만. 위치 검색·지도: OpenStreetMap.")
 MODEL_NOTE = (f"AI 예측 시세: Gradient Boosting 환산월세 예측(계약 {price['period'].replace('~', '–')}, 최근 계약 20% 검증 "
-              f"MAE {price['mae']:.1f}만 원) · 참고 정보" if price else "가격 모델이 없어 시세 비교는 생략했어요.")
+              f"MAE {price['mae']:.1f}만 원) · 싼 편/비싼 편 = 같은 계약·방 종류 실제 계약의 예측 오차 하위·상위 10% 밖"
+              " · 참고 정보" if price else "가격 모델이 없어 시세 비교는 생략했어요.")
+
+
+def gap_tag(gap: float, li) -> tuple[str, str]:
+    """매물(li)의 계약·방 종류에 맞는 오차 범위로 시세 대비 배지. 예전 빌드(밴드 없음)는 ±MAE."""
+    return gap_label(gap, band_for(price.get("band", {}), li.rent, li.area_m2, price["mae"]))
 
 # ── 1. 동네 찾기 ──
 if page == "동네 찾기":
@@ -688,7 +694,7 @@ elif page == "매물 비교":
             tags = f'<span class="db-tg">종합 {r["rank"]}위</span>'
             pred = ""
             if price:
-                text, tone = gap_label(r["시세 대비(만원)"])
+                text, tone = gap_tag(r["시세 대비(만원)"], li)
                 tags += f'<span class="db-tg {tone}">{text}</span>'
                 pred = (f'<div class="db-l2">AI 예측 {r.pred_rent - r["시세 대비(만원)"]:.1f}만 / '
                         f'환산 {r.pred_rent:.1f}만</div>')
@@ -750,7 +756,7 @@ else:
             li, r = info.loc[pick], picked.set_index("region").loc[pick]
             rows_html = ""
             if price:
-                text, tone = gap_label(r["시세 대비(만원)"])
+                text, tone = gap_tag(r["시세 대비(만원)"], li)
                 rows_html += (f'<tr><td>AI 예측 시세</td><td><b>{r.pred_rent - r["시세 대비(만원)"]:.1f}만</b> (환산 '
                               f'{r.pred_rent:.1f}만) <span class="db-tg {tone}">{text}</span></td></tr>')
             rows_html += (f'<tr><td>{esc(place.strip()) or "직장·학교"}까지</td><td>{r.commute_min:.0f}분</td></tr>'

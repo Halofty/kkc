@@ -5,10 +5,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from kkc.ui import gap_label
 
 
-def test_gap_label_cheaper_pricier_similar():
-    assert gap_label(-3.24) == ("시세보다 3.2만 원 싸요", "good")
-    assert gap_label(1.8) == ("시세보다 1.8만 원 비싸요", "bad")
-    assert gap_label(0.3) == ("시세와 비슷해요", "neutral")
+def test_gap_label_only_outside_error_band():
+    # 밴드 = 같은 계약·방 실제 계약의 예측 오차 하위/상위 10% (-14.2 ~ +15.3)
+    assert gap_label(-20.04, (-14.2, 15.3)) == ("시세보다 20.0만 원 싼 편이에요", "good")
+    assert gap_label(18.0, (-14.2, 15.3)) == ("시세보다 18.0만 원 비싼 편이에요", "bad")
+    assert gap_label(-10.0, (-14.2, 15.3)) == ("시세 범위 안이에요", "neutral")  # 예전 기준(±0.5)이면 '싸요'였음
+    assert gap_label(9.0, (-14.2, 15.3)) == ("시세 범위 안이에요", "neutral")
 
 
 def test_tradeoff_lines_skip_same_region():
