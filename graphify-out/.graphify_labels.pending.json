@@ -2,6 +2,7 @@
   "0": "test_core.py",
   "1": "AI 자취방 추천 서비스 — 제안서 초안 (팀 KKC)",
   "2": "SubwayGraph",
+  "3": "test_pipeline.py",
   "4": "pandas",
   "5": "KKC · AI 자취방 추천 서비스 — Claude 작업 규칙",
   "7": ".claude/CLAUDE.md",
@@ -14,9 +15,8 @@
   "14": "vision/__init__.py",
   "15": "streamlit_app.py",
   "16": "ui.py",
-  "17": "score_regions",
+  "17": "test_core.py",
   "18": "DataFrame",
   "19": "Series",
-  "20": "subway.py",
-  "21": "KKC · AI 자취방 추천 서비스"
+  "20": "build_data.py"
 }

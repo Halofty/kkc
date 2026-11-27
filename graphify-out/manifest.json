@@ -6,9 +6,9 @@
     "semantic_hash": ""
   },
   "app/streamlit_app.py": {
-    "mtime": 1795786189.1461444,
-    "seen": 1795786726.5254369,
-    "ast_hash": "9c10521a6f0a7c5619a28b7d910b1206",
+    "mtime": 1795786765.3404675,
+    "seen": 1795786854.7915363,
+    "ast_hash": "69f570e1142562422700d85ae3258efd",
     "semantic_hash": ""
   },
   "scripts/install-plugins.ps1": {
@@ -60,9 +60,9 @@
     "semantic_hash": ""
   },
   "src/kkc/ranking/rank.py": {
-    "mtime": 1795781177.3991582,
-    "seen": 1795786726.5254369,
-    "ast_hash": "787c9fe8a4c2bf075ce26e665892d8eb",
+    "mtime": 1795786765.179381,
+    "seen": 1795786854.7915363,
+    "ast_hash": "79dfd268c5d639e2c2a2d08a2b7c6fd1",
     "semantic_hash": ""
   },
   "src/kkc/vision/__init__.py": {
@@ -78,9 +78,9 @@
     "semantic_hash": ""
   },
   "tests/test_core.py": {
-    "mtime": 1795781177.4077878,
-    "seen": 1795786726.5254369,
-    "ast_hash": "2f1c85ac31e90e437a4bc86a16ff8b18",
+    "mtime": 1795786811.5799265,
+    "seen": 1795786854.7915363,
+    "ast_hash": "e50fc7117d93ddecf658717186234521",
     "semantic_hash": ""
   },
   ".claude/CLAUDE.md": {

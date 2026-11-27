@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from kkc.commute.subway import nearest_station_by_walk, region_commute  # noqa: E402
 from kkc.price.model import BTYPES, ROOMS, band_for, converted_rent, price_gap  # noqa: E402
-from kkc.ranking.rank import score_regions, tradeoff_suggestions  # noqa: E402
+from kkc.ranking.rank import commute_relax, score_regions, tradeoff_suggestions  # noqa: E402
 from kkc.ui import SORTS, gap_label, pick_photo, sort_regions, tradeoff_lines  # noqa: E402
 from kkc.vision.fov import (STD_FOV_DEG, crop_ratio, load_fov_model, predict_fov,  # noqa: E402
                             restore_standard_view, wide_angle_flag)
@@ -99,7 +99,8 @@ header[data-testid="stHeader"], [data-testid="stToolbar"] {{ display: none; }}
 .st-key-hd > :nth-child(3) {{ margin-left: auto; }}
 .st-key-search [data-testid="stTextInputRootElement"], .st-key-search [data-testid="stTextInputRootElement"] * {{
   background: transparent !important; border: none !important; box-shadow: none !important; }}
-.db-login {{ font-size: 14px; color: #888; margin-left: 40px; white-space: nowrap; }}
+.db-ico {{ font-size: 14px; opacity: .55; }}
+.st-key-search input {{ min-width: 150px; }}
 /* 왼쪽 레일 */
 .st-key-rail {{ width: 80px; min-height: calc(100vh - 80px); border-right: 1px solid #E1E1E1; padding-top: 12px; }}
 .st-key-rail [role="radiogroup"] {{ flex-direction: column !important; gap: 6px; align-items: center; }}
@@ -394,15 +395,16 @@ price, subway, fov_model, transit = load()
 ready = REGIONS.exists() and STATIONS.exists() and DEALS.exists() and subway
 ss.rail_pg = ss.nav_pg = ss.page
 
-# ── 헤더: 로고 · 검색(+ 가까운 역) · 내비 · 로그인 ──
+# ── 헤더: 로고 · 검색(+ 가까운 역) · 내비 ──
 with st.container(key="hd", horizontal=True):
     st.html('<div class="db-logo">kkc</div>')
     with st.container(key="search", horizontal=True):
-        place = st.text_input("직장·학교", value="경희대학교", label_visibility="collapsed", key="place")
+        st.html('<span class="db-ico">🔍</span>')
+        place = st.text_input("직장·학교", value="경희대학교", label_visibility="collapsed", key="place",
+                              placeholder="직장·학교 입력 후 Enter")
         hint = st.empty()
     with st.container(key="nav"):
         st.segmented_control("화면", PAGES, key="nav_pg", on_change=sync_from_nav, label_visibility="collapsed")
-    st.html('<div class="db-login">로그인 · 회원가입</div>')
 
 rail_col, body = st.columns([1, 17], gap=None)
 with rail_col, st.container(key="rail"):
@@ -519,6 +521,7 @@ if by_dong:  # 동 단위: 동 위치 → 가까운 역(도보) → 지하철 �
     regions, ranked = rank_view(dongs.assign(region=dongs.gu + " " + dongs.dong))
 in_budget = regions[(regions.deposit_med <= max_deposit) & (regions.rent_med <= max_rent)]
 tradeoffs = tradeoff_lines(tradeoff_suggestions(in_budget, budget=float("inf"), max_commute=max_commute))
+relax = commute_relax(in_budget, max_commute) if ranked.empty else None
 
 
 def svg_img(svg: str, cls: str = "", style: str = "") -> str:
@@ -626,7 +629,9 @@ if page == "동네 찾기":
             st.html('<div class="db-tip">💡 ' + "<br>💡 ".join(esc(t) for t in tradeoffs)
                     + f'<br><small>{room} {kind} 실거래 중앙값의 환산월세 기준 · 가장 싼 동네끼리 비교</small></div>')
         if ranked.empty:
-            st.html('<div class="db-note">조건에 맞는 동네가 없어요. 위 필터에서 보증금·월세·통학 시간을 늘려 보세요.</div>')
+            st.html(f'<div class="db-tip">💡 통학 {relax["extra_minutes"]}분만 늘리면 {relax["count"]}곳이 나와요. '
+                    f'위 필터에서 통학을 {max_commute + relax["extra_minutes"]}분으로 바꿔 보세요.</div>' if relax else
+                    '<div class="db-note">조건에 맞는 동네가 없어요. 위 필터에서 보증금·월세·통학 시간을 늘려 보세요.</div>')
         with st.container(height=690, border=False):
             if not shown.empty:  # st.html("")은 오류라 빈 목록이면 건너뜀
                 st.html("".join(
