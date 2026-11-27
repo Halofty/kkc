@@ -36,6 +36,7 @@ from kkc.vision.fov import (STD_FOV_DEG, crop_ratio, load_fov_model, predict_fov
 REGIONS, STATIONS, DEALS, DONGS, DEALS_DONG, PRICE, SUBWAY, FOV = (ROOT / p for p in (
     "data/processed/regions.csv", "data/processed/stations.csv", "data/processed/deals.csv", "data/processed/dongs.csv",
     "data/processed/deals_dong.csv", "models/price.joblib", "models/subway.pkl", "models/fov.pt"))
+TRANSIT = ROOT / "models/transit.pkl"  # 버스+지하철 그래프 (build_data.py --bus-*), 없으면 지하철만
 PHOTOS = ROOT / "data/raw/listing_photos"  # scripts/unsplash_listings.py 가 받은 예시 매물 사진 (없으면 일러스트)
 MIN_DEALS = 10  # 동 단위는 최근 12개월 거래가 이보다 적으면 통계가 들쭉날쭉해서 뺀다
 DONG_SHOWN = 15  # 동 단위 목록·지도에 보여줄 추천 상위 개수 (400곳을 다 그리면 지도가 덮인다)
@@ -183,7 +184,8 @@ def load():
     price = joblib.load(PRICE) if PRICE.exists() else None
     subway = pickle.load(open(SUBWAY, "rb")) if SUBWAY.exists() else None
     fov = load_fov_model(FOV) if FOV.exists() else None
-    return price, subway, fov
+    transit = pickle.load(open(TRANSIT, "rb")) if TRANSIT.exists() else None
+    return price, subway, fov, transit
 
 
 @st.cache_data(show_spinner="위치 찾는 중…")
@@ -226,6 +228,25 @@ def walk_path(lat: float, lon: float, slat: float, slon: float) -> list | None:
 def walk_station(lat: float, lon: float, coords: pd.DataFrame) -> tuple[str, float]:
     """직선이 아니라 실제 걷는 길로 가장 가까운 역 (산·철길 너머 역을 고르지 않게). 오프라인이면 직선 거리로."""
     return nearest_station_by_walk(lat, lon, coords, walk_m)
+
+
+@st.cache_data(show_spinner="버스+지하철 통학 시간 계산 중…")
+def bus_commute(lat: float, lon: float, station: str, walk: float, origins: pd.DataFrame) -> pd.Series:
+    """origins(lat, lon, station, walk_min) 각각에서 목적지까지 버스+지하철 최소 분. 버스 그래프가 없으면 NaN.
+    목적지 쪽: 실제 걷는 길로 닿는 정류장·역 + 고른 통학역(도보 walk). 출발 쪽: 걸어서 닿는 정류장·역 + 그 동의 가까운 역."""
+    if transit is None:
+        return pd.Series(float("nan"), index=origins.index)
+    egress = transit.access(lat, lon, walk_m)
+    egress.update({n: walk for n in subway.nodes_of(station)})
+    to = transit.times_to(egress)
+    return pd.Series([transit.time_from(o.lat, o.lon, to, {n: o.walk_min for n in subway.nodes_of(o.station)})
+                      for o in origins.itertuples()], index=origins.index)
+
+
+def with_bus(df: pd.DataFrame, subway_min: pd.Series, mixed: pd.Series) -> pd.DataFrame:
+    """통학 = 지하철만 / 버스 섞기 중 빠른 쪽. bus = 버스를 타야 더 빠른 곳."""
+    return df.assign(commute_min=pd.concat([subway_min, mixed], axis=1).min(axis=1).round(),
+                     bus=(mixed < subway_min - 0.5).fillna(False))
 
 
 def won(v: float) -> str:
@@ -364,7 +385,7 @@ def sync_from_nav():
     ss.page = ss.rail_pg = ss.nav_pg
 
 
-price, subway, fov_model = load()
+price, subway, fov_model, transit = load()
 ready = REGIONS.exists() and STATIONS.exists() and DEALS.exists() and subway
 ss.rail_pg = ss.nav_pg = ss.page
 
@@ -467,7 +488,8 @@ if ready:
             "stn": {"lat": float(coords.lat[station]), "lon": float(coords.lon[station]), "name": f"{station}역"},
             "path": walk_path(lat, lon, float(coords.lat[station]), float(coords.lon[station]))}
     hint.html(f'<span class="db-hint">· {station}역 도보 {walk:.0f}분{" ⚠️" if walk > 25 else ""}</span>')
-    regions["commute_min"] = (regions.region.map(region_commute(subway, station)) + walk).round()
+    regions = with_bus(regions, regions.region.map(region_commute(subway, station)) + walk,  # 구 출발점 = 대표역
+                       bus_commute(lat, lon, station, walk, regions[["lat", "lon", "station"]].assign(walk_min=0.0)))
     deals = pd.read_csv(DEALS).query("room == @room and kind == @kind").drop(columns=["room", "kind"])
     regions = regions.dropna(subset=["commute_min"]).merge(deals.rename(columns={"gu": "region"}), on="region")
 else:
@@ -485,7 +507,8 @@ regions, ranked = rank_view(regions)
 by_dong = page == "동네 찾기" and level == "동" and ready and DONGS.exists() and DEALS_DONG.exists()
 if by_dong:  # 동 단위: 동 위치 → 가까운 역(도보) → 지하철 → 목적지 역(도보). '동네 찾기' 화면에서만 바꾼다.
     dongs = pd.read_csv(DONGS)
-    dongs["commute_min"] = (dongs.station.map(subway.times_from(station)) + dongs.walk_min + walk).round()
+    dongs = with_bus(dongs, dongs.station.map(subway.times_from(station)) + dongs.walk_min + walk,
+                     bus_commute(lat, lon, station, walk, dongs[["lat", "lon", "station", "walk_min"]]))
     dstats = pd.read_csv(DEALS_DONG).query("room == @room and kind == @kind and deals >= @MIN_DEALS")
     dongs = dongs.dropna(subset=["commute_min"]).merge(dstats.drop(columns=["room", "kind"]), on=["gu", "dong"])
     regions, ranked = rank_view(dongs.assign(region=dongs.gu + " " + dongs.dong))
@@ -559,7 +582,9 @@ def compare_listings():
 
 SRC = ("보증금·월세: 서울특별시 전월세가 정보(서울 열린데이터광장, 아파트 제외) 최근 12개월 실제 계약 — 방은 면적으로 구분"
        "(원룸 33㎡ 이하, 투룸 33~66㎡), 보증금은 가운데 50% 범위, 월세는 중앙값. 통학: 구 단위는 구 대표역, 동 단위는 "
-       "동 위치에서 가장 가까운 역까지 도보 + 서울교통공사 역간 소요시간(2024-08) + 환승 + 목적지 도보. 동 위치·편의시설: "
+       "동 위치에서 가장 가까운 역까지 도보 + 서울교통공사 역간 소요시간(2024-08) + 환승 + 목적지 도보 (1호선 코레일 구간·9호선은 "
+       "OpenStreetMap 노선으로 보강, 역간 시간은 거리로 추정). 버스를 섞는 게 더 빠르면 그 시간: 서울시 버스노선별 정류소(2026-11-02) + "
+       "TOPIS 구간 평균 운행시간·운행횟수(2026-11-09~13 평일 7~8시, 대기 = 배차 간격의 절반). 동 위치·편의시설: "
        f"소상공인시장진흥공단 상가정보(2026-09, 동 위치 = 그 동 상가 좌표 중앙값). 동 단위는 최근 12개월 거래 {MIN_DEALS}건 "
        "이상인 동만. 위치 검색·지도: OpenStreetMap.")
 MODEL_NOTE = (f"AI 예측 시세: Gradient Boosting 환산월세 예측(계약 {price['period'].replace('~', '–')}, 최근 계약 20% 검증 "
@@ -591,7 +616,8 @@ if page == "동네 찾기":
                 f'<div class="db-l1">{esc(r.region)}{" · " + esc(r.station) + "역 근처" if "station" in r else ""}'
                 f'{f" (도보 {r.walk_min:.0f}분)" if "walk_min" in r else ""}'
                 f' · {"보증금" if r.rent_med else "전세금"} {deposit_text(r)}</div>'
-                f'<div class="db-l1">{room} · 통학 {r.commute_min:.0f}분{f" · 거래 {r.deals:,.0f}건" if "deals" in r else ""}</div>'
+                f'<div class="db-l1">{room} · 통학 {r.commute_min:.0f}분{" (버스 포함)" if r.get("bus") else ""}'
+                f'{f" · 거래 {r.deals:,.0f}건" if "deals" in r else ""}</div>'
                 f'<div class="db-l2">편의점·마트·병원 {r.amenity_cnt:,.0f}곳</div>'
                 f'<span class="db-tg">추천 {r["rank"]}위</span></div></div>'
                 for _, r in shown.iterrows()))
@@ -606,7 +632,8 @@ if page == "동네 찾기":
                             "value": f"{r.rent_med:.0f}만" if r.rent_med else won(r.deposit_med),
                             "state": "off" if k is None else "top" if k < 3 else "on",
                             "tip": f"<b>{f'추천 {k + 1}위 ' if k is not None else '조건 밖 · '}{r.region}</b><br>{room} "
-                                   f"{price_text(r)}<br>🚇 {who}까지 {r.commute_min:.0f}분 ({r.station}역) · 거래 {r.deals:,.0f}건"})
+                                   f"{price_text(r)}<br>{'🚌 버스 포함' if r.get('bus') else '🚇'} {who}까지 {r.commute_min:.0f}분 "
+                                   f"({r.station}역) · 거래 {r.deals:,.0f}건"})
             leaflet_map(pts, dest, note="원 안의 숫자 = " + ("원룸 " if room == "원룸" else "투룸 ")
                         + ("월세 중앙값" if kind == "월세" else "전세금 중앙값")
                         + (f" · 추천 상위 {DONG_SHOWN}개 동" if by_dong else " · 회색 = 조건 밖") + " · 마커에 마우스를 올리면 자세히")
